@@ -48,7 +48,7 @@ import SwiftUI
 ///
 /// To gain more control over the loading process, use the
 /// ``init(url:urlCache:scale:transaction:content:)`` initializer, which takes a
-/// `content` closure that receives an ``AsyncImagePhase`` to indicate
+/// `content` closure that receives an ``CachedAsyncImagePhase`` to indicate
 /// the state of the loading operation. Return a view that's appropriate
 /// for the current phase:
 ///
@@ -65,7 +65,7 @@ import SwiftUI
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 public struct CachedAsyncImage<Content>: View where Content: View {
     
-    @State private var phase: AsyncImagePhase
+    @State private var phase: CachedAsyncImagePhase
     
     private let urlRequest: URLRequest?
     
@@ -75,7 +75,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     
     private let transaction: Transaction
     
-    private let content: (AsyncImagePhase) -> Content
+    private let content: (CachedAsyncImagePhase) -> Content
     
     public var body: some View {
         content(phase)
@@ -222,11 +222,11 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     ///
     /// If you set the asynchronous image's URL to `nil`, or after you set the
     /// URL to a value but before the load operation completes, the phase is
-    /// ``AsyncImagePhase/empty``. After the operation completes, the phase
-    /// becomes either ``AsyncImagePhase/failure(_:)`` or
-    /// ``AsyncImagePhase/success(_:)``. In the first case, the phase's
-    /// ``AsyncImagePhase/error`` value indicates the reason for failure.
-    /// In the second case, the phase's ``AsyncImagePhase/image`` property
+    /// ``CachedAsyncImagePhase/empty``. After the operation completes, the phase
+    /// becomes either ``CachedAsyncImagePhase/failure(_:)`` or
+    /// ``CachedAsyncImagePhase/success(_:)``. In the first case, the phase's
+    /// ``CachedAsyncImagePhase/error`` value indicates the reason for failure.
+    /// In the second case, the phase's ``CachedAsyncImagePhase/image`` property
     /// contains the loaded image. Use the phase to drive the output of the
     /// `content` closure, which defines the view's appearance:
     ///
@@ -253,7 +253,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     ///   - transaction: The transaction to use when the phase changes.
     ///   - content: A closure that takes the load phase as an input, and
     ///     returns the view to display for the specified phase.
-    public init(url: URL?, urlCache: URLCache = .shared, scale: CGFloat = 1, transaction: Transaction = Transaction(), @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
+    public init(url: URL?, urlCache: URLCache = .shared, scale: CGFloat = 1, transaction: Transaction = Transaction(), @ViewBuilder content: @escaping (CachedAsyncImagePhase) -> Content) {
         let urlRequest = url == nil ? nil : URLRequest(url: url!)
         self.init(urlRequest: urlRequest, urlCache: urlCache, scale: scale, transaction: transaction, content: content)
     }
@@ -262,11 +262,11 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     ///
     /// If you set the asynchronous image's URL to `nil`, or after you set the
     /// URL to a value but before the load operation completes, the phase is
-    /// ``AsyncImagePhase/empty``. After the operation completes, the phase
-    /// becomes either ``AsyncImagePhase/failure(_:)`` or
-    /// ``AsyncImagePhase/success(_:)``. In the first case, the phase's
-    /// ``AsyncImagePhase/error`` value indicates the reason for failure.
-    /// In the second case, the phase's ``AsyncImagePhase/image`` property
+    /// ``CachedAsyncImagePhase/empty``. After the operation completes, the phase
+    /// becomes either ``CachedAsyncImagePhase/failure(_:)`` or
+    /// ``CachedAsyncImagePhase/success(_:)``. In the first case, the phase's
+    /// ``CachedAsyncImagePhase/error`` value indicates the reason for failure.
+    /// In the second case, the phase's ``CachedAsyncImagePhase/image`` property
     /// contains the loaded image. Use the phase to drive the output of the
     /// `content` closure, which defines the view's appearance:
     ///
@@ -293,7 +293,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     ///   - transaction: The transaction to use when the phase changes.
     ///   - content: A closure that takes the load phase as an input, and
     ///     returns the view to display for the specified phase.
-    public init(urlRequest: URLRequest?, urlCache: URLCache = .shared, scale: CGFloat = 1, transaction: Transaction = Transaction(), @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
+    public init(urlRequest: URLRequest?, urlCache: URLCache = .shared, scale: CGFloat = 1, transaction: Transaction = Transaction(), @ViewBuilder content: @escaping (CachedAsyncImagePhase) -> Content) {
         let configuration = URLSessionConfiguration.default
         configuration.urlCache = urlCache
         self.urlRequest = urlRequest
@@ -304,8 +304,8 @@ public struct CachedAsyncImage<Content>: View where Content: View {
         
         self._phase = State(wrappedValue: .empty)
         do {
-            if let urlRequest = urlRequest, let image = try cachedImage(from: urlRequest, cache: urlCache) {
-                self._phase = State(wrappedValue: .success(image))
+            if let urlRequest = urlRequest, let (image, size) = try cachedImage(from: urlRequest, cache: urlCache) {
+                self._phase = State(wrappedValue: .success(image, size))
             }
         } catch {
             self._phase = State(wrappedValue: .failure(error))
@@ -316,13 +316,13 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     private func load() async {
         do {
             if let urlRequest = urlRequest {
-                let (image, metrics) = try await remoteImage(from: urlRequest, session: urlSession)
+                let (image, size, metrics) = try await remoteImage(from: urlRequest, session: urlSession)
                 if metrics.transactionMetrics.last?.resourceFetchType == .localCache {
                     // WARNING: This does not behave well when the url is changed with another
-                    phase = .success(image)
+                    phase = .success(image, size)
                 } else {
                     withAnimation(transaction.animation) {
-                        phase = .success(image)
+                        phase = .success(image, size)
                     }
                 }
             } else {
@@ -351,7 +351,7 @@ private extension AsyncImage {
 
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 private extension CachedAsyncImage {
-    private func remoteImage(from request: URLRequest, session: URLSession) async throws -> (Image, URLSessionTaskMetrics) {
+    private func remoteImage(from request: URLRequest, session: URLSession) async throws -> (Image, CGSize, URLSessionTaskMetrics) {
         let (data, _, metrics) = try await session.data(for: request)
         if metrics.redirectCount > 0, let lastResponse = metrics.transactionMetrics.last?.response {
             let requests = metrics.transactionMetrics.map { $0.request }
@@ -359,24 +359,25 @@ private extension CachedAsyncImage {
             let lastCachedResponse = CachedURLResponse(response: lastResponse, data: data)
             session.configuration.urlCache!.storeCachedResponse(lastCachedResponse, for: request)
         }
-        return (try image(from: data), metrics)
+        let (image, size) = try imageInfo(from: data)
+        return (image, size, metrics)
     }
     
-    private func cachedImage(from request: URLRequest, cache: URLCache) throws -> Image? {
+    private func cachedImage(from request: URLRequest, cache: URLCache) throws -> (Image, CGSize)? {
         guard let cachedResponse = cache.cachedResponse(for: request) else { return nil }
-        return try image(from: cachedResponse.data)
+        return try imageInfo(from: cachedResponse.data)
     }
     
-    private func image(from data: Data) throws -> Image {
+    private func imageInfo(from data: Data) throws -> (Image, CGSize) {
 #if os(macOS)
         if let nsImage = NSImage(data: data) {
-            return Image(nsImage: nsImage)
+            return (Image(nsImage: nsImage), nsImage.size)
         } else {
             throw AsyncImage<Content>.LoadingError()
         }
 #else
         if let uiImage = UIImage(data: data, scale: scale) {
-            return Image(uiImage: uiImage)
+            return (Image(uiImage: uiImage), uiImage.size)
         } else {
             throw AsyncImage<Content>.LoadingError()
         }
@@ -403,4 +404,79 @@ private extension URLSession {
         let (data, response) = try await data(for: request, delegate: controller)
         return (data, response, controller.metrics!)
     }
+}
+
+
+/// The current phase of the asynchronous image loading operation, with image size provided.
+///
+/// When you create an ``AsyncImage`` instance with the
+/// ``AsyncImage/init(url:scale:transaction:content:)`` initializer, you define
+/// the appearance of the view using a `content` closure. SwiftUI calls the
+/// closure with a phase value at different points during the load operation
+/// to indicate the current state. Use the phase to decide what to draw.
+/// For example, you can draw the loaded image if it exists, a view that
+/// indicates an error, or a placeholder:
+///
+///     AsyncImage(url: URL(string: "https://example.com/icon.png")) { phase in
+///         if let image = phase.image {
+///             image // Displays the loaded image.
+///                 .resizable()
+///                 .frame(width: phase.size.width, height: phase.size.height)  // Uses the image size.
+///         } else if phase.error != nil {
+///             Color.red // Indicates an error.
+///         } else {
+///             Color.blue // Acts as a placeholder.
+///         }
+///     }
+///
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+public enum CachedAsyncImagePhase {
+
+    /// No image is loaded.
+    case empty
+
+    /// An image succesfully loaded.
+    case success(Image, CGSize)
+
+    /// An image failed to load with an error.
+    case failure(Error)
+
+    /// The loaded image, if any.
+    ///
+    /// If this value isn't `nil`, the image load operation has finished,
+    /// and you can use the image to update the view. You can use the image
+    /// directly, or you can modify it in some way. For example, you can add
+    /// a ``Image/resizable(capInsets:resizingMode:)`` modifier to make the
+    /// image resizable.
+    public var image: Image? { 
+        switch self {
+        case .success(let image, _):
+            return image
+        default:
+            return nil
+        }
+     }
+
+    /// The size of the loaded image, if any.
+    /// 
+    /// If this value isn't `nil`, the image load operation has finished,
+    /// and you can use the image size to update the view.
+    public var size: CGSize? { 
+        switch self {
+        case .success(_, let size):
+            return size
+        default:
+            return nil
+        }
+     }
+
+    /// The error that occurred when attempting to load an image, if any.
+    public var error: Error? { 
+        switch self {
+        case .failure(let error):
+            return error
+        default:
+            return nil
+        }
+     }
 }
